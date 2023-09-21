@@ -1,10 +1,9 @@
-# -*- coding: utf-8 -*-
+"""
+Create a function to check authentication for flask app
+"""
 import base64
 
 import settings
-# from django.core.exceptions import PermissionDenied
-
-
 
 def check_auth_basic(func):
 

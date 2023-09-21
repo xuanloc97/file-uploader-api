@@ -1,10 +1,8 @@
-import os, logging
+import os
+import logging
 from datetime import datetime
 
-from flask import Flask, request
-
-
-from flask import Response
+from flask import Flask, Response, request
 from flask.views import MethodView
 
 from exceptions import (
@@ -30,6 +28,7 @@ from authentication import check_auth_basic
 from flask_migrate import Migrate, MigrateCommand
 from flask_script import Manager
 
+
 basedir = os.path.abspath(os.path.dirname(__file__))
 
 app = Flask(__name__)
@@ -40,7 +39,6 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 # from files import Files
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy_serializer import SerializerMixin
-from sqlalchemy.orm.exc import NoResultFound
 
 db = SQLAlchemy(app)
 
@@ -89,33 +87,39 @@ def get():
         # file type allow
 
         # check file in database
-        try:
-            file_db = Files.query.filter_by(name=file_name).first()
-            print(file_db.hash)
-        except Exception as e:
-            return {"Status": 200, "Message": "File not found" }
+        file_db = Files.query.filter_by(name=file_name).first()
+        if file_db is None:
+            logger.info(f'{file_db.name}: File not found')
+            return ResponseAPI(
+                respone_code=respone_status.FILE_DOES_NOT_EXIST.code,
+                response_message=respone_status.FILE_DOES_NOT_EXIST.message,
+                response_data=file_db.to_dict()).resp
 
         # check file on disk
         status, file_content = handle_read_file_disk(file_db.name)
 
-        #file okie
+        # file okie
         if status == 0:
-            print(f'{file_db.name} "client_ip" : {request.environ["REMOTE_ADDR"]}')
             response = Response(file_content, content_type=str(content_type))
-            # response['Content-Disposition'] = 'inline; filename=' + file_db.name
             return response
 
         # file not found
         elif status == -1:
-            raise FileNotSync(logger = logging.getLogger("data"))
+            return ResponseAPI(
+                respone_code=respone_status.FILE_DOES_NOT_SYNC.code,
+                response_message=respone_status.FILE_DOES_NOT_SYNC.message).resp
 
         # file error
         elif status == -2:
-            raise ServerError(logger = logging.getLogger("data"))
+            return ResponseAPI(
+                respone_code=respone_status.SERVER_ERROR.code,
+                response_message=respone_status.SERVER_ERROR.message).resp
 
     else:
         # file type not allow
-        raise FileTypeNotAllow(logger = logging.getLogger("data"))
+        return ResponseAPI(
+            respone_code=respone_status.FILE_TYPE_NOT_ALLOW.code,
+            response_message=respone_status.FILE_TYPE_NOT_ALLOW.message).resp
 
 
 @check_auth_basic
@@ -159,21 +163,19 @@ def post():
                 # check file name native have exits
                 try:
                     # if record have in database
-
                     file_db = Files.query.filter_by(name=str(file.filename)).first()
-                    # file_serializer = FileSerializer(file_db)files
+
                     if file_db is None:
                         # if name native record not exits and database
-                        file_db = Files(name=str(file.filename), hash=str(message), time_modify=datetime.now())
+                        file_db = Files(name=str(file.filename), hash=str(message), time_modify=datetime.utcnow())
                         db.session.add(file_db)
                         db.session.commit()
-                        # file_serializer = FileSerializer(file_db)
                         logger.info(str(file_db.hash) + ":" + str(file_db.name), extra={"client_ip": request.environ['REMOTE_ADDR'], "user": None})
                         return ResponseAPI(
                             respone_code=respone_status.SUCCESS.code,
-                            response_message="create " + respone_status.SUCCESS.message,
-                            response_data=file_db.to_dict()).resp  
-                    else:                      
+                            response_message=respone_status.SUCCESS.message,
+                            response_data=file_db.to_dict()).resp
+                    else:
                         logger.error(str(file_db.name) + " exist", extra={"client_ip": request.environ['REMOTE_ADDR'], "user": None})
                         return ResponseAPI(
                             respone_code=respone_status.FILE_EXIST.code,
@@ -182,312 +184,110 @@ def post():
 
                 except Exception as e:
                     db.session.rollback()
-                    raise ServerError(str(e))
+                    logger.info(f'Server Error when save file on DB')
+                    return ResponseAPI(
+                        respone_code=respone_status.SERVER_ERROR.code,
+                        response_message=respone_status.SERVER_ERROR.message,
+                        response_data=file_db.to_dict()).resp
 
             elif status == -1:
                 raise FileDoesNotExist(message)
             else:
-                raise ServerError(message)
+                logger.info(f'Server Error when posting file')
+                return ResponseAPI(
+                    respone_code=respone_status.SERVER_ERROR.code,
+                    response_message=respone_status.SERVER_ERROR.message,
+                    response_data="Server Error when posting file").resp
 
         else:
             # file size > limit
-            raise FileSizeLimit(str(file.filename))
+            logger.info(f'File size max limit')
+            return ResponseAPI(
+                respone_code=respone_status.FILE_SIZE_LIMIT.code,
+                response_message=respone_status.FILE_SIZE_LIMIT.message,
+                response_data="File size max limit").resp
 
     # file type not allow
     else:
-        raise FileTypeNotAllow(str(file.filename))
+        return ResponseAPI(
+            respone_code=respone_status.FILE_TYPE_NOT_ALLOW.code,
+            response_message=respone_status.FILE_TYPE_NOT_ALLOW.message).resp
 
 
 @check_auth_basic
 @app.route('/uploadfile', methods=['DELETE'])
 def delete():
-
+    total_same_hashs = 0
     file_name = request.args['file_name']
     # validate file type
     status, _ = check_file_type(file_name)
 
-    # file type allow    
+    # file type allow
     if status == 0:
-        # check file in database
+        try:
+            # check file in database
+            file_db = Files.query.filter_by(name=str(file_name)).first()
 
-        file_db = Files.query.filter_by(name=str(file_name)).first()
+            if file_db:
+                # Find all files contain same hash
+                total_same_hashs = Files.query.filter_by(hash=file_db.hash).count()
 
-        if file_db:
-            # check file on disk and delete on DB
-            file_status, file_name = handle_delete_file_disk(file_db.hash)
+                if total_same_hashs == 1:
+                    # check file on disk
+                    file_status, file_name = handle_delete_file_disk(file_db.hash)
+                    # delete on DB
+                    db.session.delete(file_db)
+                    db.session.commit()
+                    # file had deleted
+                    if file_status == 0:
+                        logger.info(f'{file_db.hash} + ":" + {file_db.name} has already deleted')
+                        return ResponseAPI(
+                            respone_code=respone_status.SUCCESS.code,
+                            response_message=respone_status.SUCCESS.message,
+                            response_data="Removed file " + file_name).resp
+                    # file not found on disk
+                    elif file_status == -1:
+                        logger.info(f'{file_db.name}: File not found on Disk')
+                        return ResponseAPI(
+                            respone_code=respone_status.FILE_DOES_NOT_EXIST.code,
+                            response_message=respone_status.FILE_DOES_NOT_EXIST.message,
+                            response_data=file_db.to_dict()).resp
 
-            # file had deleted
-            if file_status == 0:
-                logger.info(f'{file_db.hash} + ":" + {file_db.name} has already deleted')
+                    # file error
+                    elif file_status == -2:
+                        logger.info(f'Server Error when deleting file')
+                        return ResponseAPI(
+                            respone_code=respone_status.SERVER_ERROR.code,
+                            response_message=respone_status.SERVER_ERROR.message,
+                            response_data=file_db.to_dict()).resp
 
-            # file not found
-            elif file_status == -1:
-                return {"Status": 200, "Message": "File not found" }
-
-            # file error
-            elif file_status == -2:
-                raise ServerError(file_name)
-
-
-            try:
-                file_db = Files.query.filter_by(name=str(file_name)).first()
-                db.session.delete(file_db)
-                db.session.commit()           
-                logger.info(f'{file_db.name} is deleted on DB')
+                elif total_same_hashs > 1:
+                    # delete on DB
+                    db.session.delete(file_db)
+                    db.session.commit()
+                    logger.info(f'{file_db.name} is deleted on DB')
+                    return ResponseAPI(
+                        respone_code=respone_status.SUCCESS.code,
+                        response_message=respone_status.SUCCESS.message,
+                        response_data=file_name + ": Only remove file on DB ").resp
+            else:
                 return ResponseAPI(
-                    respone_code=respone_status.SUCCESS.code,
-                    response_message=respone_status.SUCCESS.message,
-                    response_data="remove file " + file_name).resp
-            except Exception as e:
-                db.session.rollback()
-                raise ServerError(e)
+                    respone_code=respone_status.FILE_DOES_NOT_EXIST.code,
+                    response_message=respone_status.FILE_DOES_NOT_EXIST.message).resp
+
+        except Exception as e:
+            # Need to rollback transactions uncompleted
+            db.session.rollback()
+            return ResponseAPI(
+                respone_code=respone_status.SERVER_ERROR.code,
+                response_message=respone_status.SERVER_ERROR.message).resp
 
     else:
         # file type not allow
-        raise FileTypeNotAllow(file_name)
-    
+        return ResponseAPI(
+            respone_code=respone_status.FILE_TYPE_NOT_ALLOW.code,
+            response_message=respone_status.FILE_TYPE_NOT_ALLOW.message).resp
 
-class FileViewSet(MethodView):
-
-    # logger = logging.getLogger("data")
-
-    @check_auth_basic
-    def get(self, request, name):
-
-
-        status , content_type = check_file_type(name)
-
-        # validate file type
-        if status == 0:
-            # file type allow
-
-            # check file in database
-            try:
-                file_db = Files.objects.get(name=name)
-            except Files.DoesNotExist as e:
-                raise DoesNotExist(name)
-
-            # check file on disk
-            status, file_content = handle_read_file_disk(file_db.hash)
-
-            #file okie
-            if status == 0:
-                self.logger.info(str(file_db.name), extra={"client_ip": request.environ['REMOTE_ADDR'], "user": None})
-                response = Response(file_content, content_type=str(content_type))
-                response['Content-Disposition'] = 'inline; filename=' + file_db.name
-                return response
-
-            # file not found
-            elif status == -1:
-                raise FileNotSync(name)
-
-            # file error
-            elif status == -2:
-                raise ServerError(name)
-
-        else:
-            # file type not allow
-            raise FileTypeNotAllow(name)
-
-    @check_auth_basic
-    def delete(self, request, name):
-
-        status, content_type = check_file_type(name)
-
-        # validate file type
-        if status == 0:
-            # file type allow
-
-
-            # check file in database
-            record_link_file = 0
-            try:
-                file_db = Files.objects.get(name=name)
-                record_link_file = Files.objects.filter(hash=file_db.hash).count()
-            except Files.DoesNotExist:
-                raise DoesNotExist(name)
-
-            if record_link_file == 1:
-
-                file_db = Files.objects.get(name=name)
-
-                # check file on disk
-                status, file_name = handle_delete_file_disk(file_db.hash)
-
-                file_db.delete()
-
-                # file had deleted
-                if status == 0:
-                    self.logger.info(str(file_db.hash) + ":" + str(file_db.name), extra={"client_ip": request.environ['REMOTE_ADDR'], "user": None})
-                    return ResponseAPI(
-                        respone_code=respone_status.SUCCESS.code,
-                        response_message=respone_status.SUCCESS.message,
-                        response_data="remove file " + name).resp
-
-                # file not found
-                elif status == -1:
-                    raise FileNotSync(name)
-
-                # file error
-                elif status == -2:
-                    raise ServerError(name)
-
-            elif record_link_file > 1:
-                try:
-                    Files.objects.get(name=name).delete()
-                    self.logger.info("None" + ":" + str(file_db.name), extra={"client_ip": request.environ['REMOTE_ADDR'], "user": None})
-                    return ResponseAPI(
-                        respone_code=respone_status.SUCCESS.code,
-                        response_message=respone_status.SUCCESS.message,
-                        response_data="remove file " + name).resp
-                except Exception as e:
-                    raise ServerError(e.message)
-            else:
-                raise ServerError(name)
-
-        else:
-            # file type not allow
-            raise FileTypeNotAllow(name)
-
-class FileUploadViewSet(MethodView):
-
-    logger = logging.getLogger("data")
-
-    @check_auth_basic
-    def put(self, request):
-
-        # just get file first (can extend with upload multiple file)
-        list_file_object = [obj for obj in request.FILES.values()]
-
-        status, content_type = check_file_type(list_file_object[0].name)
-
-        # validate file type
-        if status == 0:
-            # file type allow
-
-
-            # check file size
-            size_limit = check_file_size_limit(list_file_object[0])
-            if size_limit == 0:
-                # file size in limit
-                try:
-                    sign_client = request.environ['HTTP_SIGN_CLIENT']
-                except:
-                    sign_client = ""
-                status, message = handle_upload_file_disk(list_file_object[0], sign_client)
-
-                if status == 0:
-                    # check file name native have exits
-                    try:
-                        # if record have in database
-
-                        file_db = Files.objects.get(name=str(list_file_object[0].name))
-                        file_db.hash = message
-                        file_db.save()
-                        # file_serializer = FileSerializer(file_db)
-
-                        self.logger.info(str(file_db.hash) + ":" + str(file_db.name), extra={"client_ip": request.environ['REMOTE_ADDR'], "user": None})
-
-                        return ResponseAPI(
-                            respone_code=respone_status.SUCCESS.code,
-                            response_message="update " + respone_status.SUCCESS.message,
-                            response_data=file_db.to_dic()).resp
-
-
-                    except Files.DoesNotExist as e:
-
-                        # if name native record not exits and database
-                        raise DoesNotExist(str(list_file_object[0].name))
-
-                    except Exception as e:
-                        raise ServerError(str(e.message))
-
-                elif status == -1:
-                    raise FileDoesNotExist(message)
-                else:
-                    raise ServerError(message)
-
-            else:
-                # file size > limit
-                raise FileSizeLimit(str(list_file_object[0].name))
-
-        else:
-            # file type not allow
-            raise FileTypeNotAllow(str(list_file_object[0].name))
-
-    @check_auth_basic
-    def post(self, request):
-
-        # just get file first (can extend with upload multiple file)
-        list_file_object = [obj for obj in request.FILES.values()]
-
-        status, content_type = check_file_type(list_file_object[0].name)
-
-        # validate file type
-        if status == 0:
-            # file type allow
-
-
-            # check file size
-            size_limit = check_file_size_limit(list_file_object[0])
-
-            # file size in limit
-            if size_limit == 0:
-
-                # TODO: force save new file with name is hash of content so if content the new file is same od file is will be same name .
-                try:
-                    sign_client = request.environ['HTTP_SIGN_CLIENT']
-                except:
-                    sign_client = ""
-
-                status, message = handle_upload_file_disk(list_file_object[0], sign_client)
-
-                if status == 0:
-
-                    # check file name native have exits
-                    try:
-                        # if record have in database
-
-                        file_db = Files.objects.get(name=str(list_file_object[0].name))
-                        # file_serializer = FileSerializer(file_db)
-
-                        self.logger.error(str(file_db.name) + " exist", extra={"client_ip": request.environ['REMOTE_ADDR'], "user": None})
-                        return ResponseAPI(
-                            respone_code=respone_status.FILE_EXIST.code,
-                            response_message=respone_status.FILE_EXIST.message,
-                            response_data=file_db.to_dic()).resp
-
-                    except Files.DoesNotExist as e:
-
-                        # if name native record not exits and database
-                        file_db = Files(name=str(list_file_object[0].name), hash=str(message))
-                        file_db.save()
-                        # file_serializer = FileSerializer(file_db)
-                        self.logger.info(str(file_db.hash) + ":" + str(file_db.name), extra={"client_ip": request.environ['REMOTE_ADDR'], "user": None})
-                        return ResponseAPI(
-                            respone_code=respone_status.SUCCESS.code,
-                            response_message="create " + respone_status.SUCCESS.message,
-                            response_data=file_db.to_dic()).resp
-
-                    except Exception as e:
-                        raise ServerError(str(e.message))
-
-                elif status == -1:
-                    raise FileDoesNotExist(message)
-                else:
-                    raise ServerError(message)
-
-            else:
-                # file size > limit
-                raise FileSizeLimit(str(list_file_object[0].name))
-
-        # file type not allow
-        else:
-            raise FileTypeNotAllow(str(list_file_object[0].name))
-
-
-app.add_url_rule('/view/', view_func=FileViewSet.as_view(name="view"))
-app.add_url_rule('/upload/', view_func=FileUploadViewSet.as_view(name="upload"))
 
 if __name__ == '__main__':
     manager.run()

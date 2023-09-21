@@ -1,13 +1,15 @@
-# -*- coding: utf-8 -*-
-class DVTException(Exception):
+"""
+Define custom exceptions
+"""
+class Base(Exception):
     def __init__(self, *args, **kwargs):
         self.msg = (list(args)[0:1] + [""])[0]
-        super(DVTException, self).__init__(*args, **kwargs)
+        super(Base, self).__init__(*args, **kwargs)
 
     def __repr__(self):
         return repr(self.msg)
 
-class UnknownTypeException(DVTException):
+class UnknownTypeException(Base):
     _def_message = "Unknown type {}."
 
     def __init__(self, tp, msg=None):
@@ -17,34 +19,34 @@ class UnknownTypeException(DVTException):
 
 
 
-class DataNotReady(DVTException):
+class DataNotReady(Base):
     pass
 
 
-class FileDoesNotExist(DVTException):
+class FileDoesNotExist(Base):
     pass
 
 
-class FileExist(DVTException):
+class FileExist(Base):
     pass
 
-class SignError(DVTException):
+class SignError(Base):
     pass
 
-class FileTypeNotAllow(DVTException):
+class FileTypeNotAllow(Base):
     pass
 
-class FileSizeLimit(DVTException):
+class FileSizeLimit(Base):
     pass
 
-class DoesNotExist(DVTException):
+class DoesNotExist(Base):
     pass
 
-class ServerError(DVTException):
+class ServerError(Base):
     pass
 
-class FileNotSync(DVTException):
+class FileNotSync(Base):
     pass
 
-class JsonParseError(DVTException):
+class JsonParseError(Base):
     pass

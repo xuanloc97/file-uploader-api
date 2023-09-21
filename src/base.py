@@ -1,13 +1,14 @@
-# -*- coding: utf-8 -*-
-from flask import Response
+"""
+Custom response from request
+"""
 import six, json
-
+from flask import Response
 
 
 class ResponseAPI():
     """
     class overwrite respine format of api
-    
+
     OrderedDict([
                     'status': 200,
                     'data': OrderedDict([{
@@ -21,7 +22,7 @@ class ResponseAPI():
 
     """
 
-    def __init__(self, respone_code, response_message, response_data, *args):
+    def __init__(self, respone_code, response_message, response_data="No recored data", *args):
 
         self.respone_code = respone_code
         self.response_message = response_message
@@ -44,22 +45,20 @@ class ResponseAPI():
 
         respone["status"] = self.status
         respone["content_type"] = "application/json"
-        respone["data"] = dict()
 
+        respone["data"] = dict()
         respone["data"]["respone_code"] = self.respone_code
         respone["data"]["response_message"] = self.response_message
         respone["data"]["response_data"] = self.response_data
-
 
         return respone
 
     # respone JSON String
     @property
     def resp(self):
-        return self._asdict()
+        return json.dumps(self._asdict())
 
     # respone is object DICT
     @property
     def resp_dict(self):
         return self._asdict()
-
