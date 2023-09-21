@@ -1,5 +1,0 @@
-Flask
-Flask-SQLAlchemy
-six
-SerializerMixin
-flask-migrate==2.7.0
