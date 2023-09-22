@@ -21,7 +21,7 @@ user_api = Blueprint('user_api', __name__)
 # this route sends back list of users
 @user_api.route('/user', methods =['GET'])
 @token_required
-def get_all_users(current_user):
+def get_all_users():
     # querying the database
     # for all the entries in it
     users = User.query.all()

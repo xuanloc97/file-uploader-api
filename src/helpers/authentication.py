@@ -26,11 +26,15 @@ def token_required(f):
             current_user = User.query\
                 .filter_by(public_id = data['public_id'])\
                 .first()
+            if current_user is None:
+                return jsonify({
+                    'message' : 'Token is invalid !'
+                }), 401      
         except:
             return jsonify({
-                'message' : 'Token is invalid !'
+                'message' : 'Authen Error'
             }), 401
         # returns the current logged in users context to the routes
-        return  f(current_user, *args, **kwargs)
+        return  f(*args, **kwargs)
   
     return decorated
